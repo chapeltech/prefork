@@ -37,6 +37,7 @@ jobs:
       - name: Build RPM packages
         run: |
           dnf install -y gcc git make rpm-build groff-base
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           topdir="$HOME/rpmbuild"
           version=$(rpm -q --specfile packaging/rpm/prefork.spec \
             --qf '%{VERSION}\n' | head -n 1)
