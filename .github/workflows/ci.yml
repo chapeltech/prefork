@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke test
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y groff
+          make -j"$(nproc)"
+          DESTDIR="$(mktemp -d)"
+          make DESTDIR="$DESTDIR" install
+          test -x "$DESTDIR/usr/libexec/prefork"
+          test -f "$DESTDIR/usr/man/man8/prefork.8"
+          set +e
+          ./prefork -N 0 -n 1 /bin/true
+          status=$?
+          set -e
+          test "$status" -eq 1

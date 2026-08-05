@@ -1,13 +1,14 @@
 Source: prefork
-Section: unknown
-Priority: extra
-Maintainer: root <elric@imrryr.org>
+Section: utils
+Priority: optional
+Maintainer: Roland C. Dowdeswell <elric@imrryr.org>
 Build-Depends: debhelper (>= 7)
 Standards-Version: 3.8.3
-Homepage: <insert the upstream URL, if relevant>
+Homepage: https://github.com/ChapelTech/prefork
 
 Package: prefork
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: <insert up to 60 chars description>
- <insert long description, indented with spaces>
+Description: preforking helper for inetd-style services
+ prefork runs an inetd-style wait service with a pool of preforked worker
+ processes.

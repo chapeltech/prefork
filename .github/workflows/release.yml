@@ -1,0 +1,70 @@
+name: Release packages
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  debian:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Build Debian packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential debhelper groff
+          dpkg-buildpackage -us -uc -b
+          mkdir dist
+          cp ../*.deb dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-packages
+          path: dist/*.deb
+
+  rpm:
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Build RPM packages
+        run: |
+          dnf install -y gcc git make rpm-build groff-base
+          topdir="$HOME/rpmbuild"
+          version=$(rpm -q --specfile packaging/rpm/prefork.spec \
+            --qf '%{VERSION}\n' | head -n 1)
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          git archive --format=tar --prefix="prefork-$version/" HEAD |
+            gzip -n > "$topdir/SOURCES/prefork-$version.tar.gz"
+          rpmbuild -ba --define "_topdir $topdir" packaging/rpm/prefork.spec
+          mkdir dist
+          find "$topdir/RPMS" "$topdir/SRPMS" -type f -name '*.rpm' \
+            -exec cp {} dist/ \;
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages
+          path: dist/*.rpm
+
+  publish:
+    needs: [debian, rpm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload packages to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload "${{ github.event.release.tag_name }}" dist/*
+          --repo "$GITHUB_REPOSITORY" --clobber

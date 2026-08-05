@@ -23,7 +23,7 @@ For now, we have no official release but the source can be found
 via git.
 
 ```
-        $ git clone https://github.com/elric1/prefork
+        $ git clone https://github.com/ChapelTech/prefork.git
         $ cd prefork
         $ make
 	$ make install

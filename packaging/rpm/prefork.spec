@@ -3,7 +3,7 @@ Version:        0.3
 Release:        1%{?dist}
 Summary:        Preforking helper for inetd-style services
 License:        MIT
-URL:            https://github.com/elric1/prefork
+URL:            https://github.com/ChapelTech/prefork
 Source0:        prefork-%{version}.tar.gz
 
 BuildRequires:  gcc
