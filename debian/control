@@ -2,8 +2,8 @@ Source: prefork
 Section: utils
 Priority: optional
 Maintainer: Roland C. Dowdeswell <elric@imrryr.org>
-Build-Depends: debhelper (>= 7)
-Standards-Version: 3.8.3
+Build-Depends: debhelper-compat (= 13), groff-base
+Standards-Version: 4.7.2
 Homepage: https://github.com/ChapelTech/prefork
 
 Package: prefork

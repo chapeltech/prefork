@@ -11,3 +11,7 @@
 
 %:
 	dh  $@
+
+override_dh_auto_install:
+	install -D -m 0755 prefork debian/prefork/usr/libexec/prefork
+	install -D -m 0644 prefork.8 debian/prefork/usr/share/man/man8/prefork.8

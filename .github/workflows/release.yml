@@ -3,60 +3,169 @@ name: Release packages
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to backfill
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-packages-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
 jobs:
   debian:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name }}
-      - name: Build Debian packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            build-essential debhelper groff
-          dpkg-buildpackage -us -uc -b
-          mkdir dist
-          cp ../*.deb dist/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: debian-packages
-          path: dist/*.deb
-
-  rpm:
-    runs-on: ubuntu-latest
-    container: rockylinux:9
+    name: Debian 13 (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: debian:trixie
     steps:
       - name: Install build dependencies
-        run: dnf install -y gcc git make rpm-build groff-base
+        run: |
+          apt-get update
+          apt-get install --no-install-recommends -y \
+            build-essential ca-certificates debhelper fakeroot git groff-base
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Use current packaging for a backfill
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git restore --source="$GITHUB_SHA" --staged --worktree -- \
+            debian
+      - name: Build Debian package
+        run: |
+          test "$(dpkg --print-architecture)" = "${{ matrix.architecture }}"
+          version=$(dpkg-parsechangelog -SVersion)
+          test "${version%%-*}" = "${RELEASE_TAG#v}"
+          dpkg-buildpackage --build=binary --no-sign
+          mkdir dist
+          cp ../prefork_*_${{ matrix.architecture }}.deb dist/
+          dpkg-deb --info dist/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-${{ matrix.architecture }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  rpm:
+    name: EL9 (x86_64)
+    runs-on: ubuntu-24.04
+    container: rockylinux:9
+    env:
+      GNUPGHOME: /tmp/archive-signing
+    steps:
+      - name: Install build and signing dependencies
+        run: |
+          dnf install -y \
+            gcc git gnupg2 groff-base make rpm-build rpm-sign
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Use current packaging for a backfill
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git restore --source="$GITHUB_SHA" --staged --worktree -- \
+            debian packaging/rpm
       - name: Build RPM packages
         run: |
+          test "$(uname -m)" = x86_64
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           topdir="$HOME/rpmbuild"
           version=$(rpm -q --specfile packaging/rpm/prefork.spec \
             --qf '%{VERSION}\n' | head -n 1)
+          test "$version" = "${RELEASE_TAG#v}"
           mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          git archive --format=tar --prefix="prefork-$version/" HEAD |
+          source_tree=$(git write-tree)
+          git archive --format=tar --prefix="prefork-$version/" \
+            "$source_tree" |
             gzip -n > "$topdir/SOURCES/prefork-$version.tar.gz"
-          rpmbuild -ba --define "_topdir $topdir" packaging/rpm/prefork.spec
+          rpmbuild -ba --define "_topdir $topdir" \
+            packaging/rpm/prefork.spec
+      - name: Sign and verify RPM packages
+        env:
+          ARCHIVE_SIGNING_KEY: ${{ secrets.ARCHIVE_SIGNING_KEY }}
+          ARCHIVE_SIGNING_PASSPHRASE: ${{ secrets.ARCHIVE_SIGNING_PASSPHRASE }}
+          ARCHIVE_SIGNING_FINGERPRINT: ${{ vars.ARCHIVE_SIGNING_FINGERPRINT }}
+        run: |
+          test -n "$ARCHIVE_SIGNING_KEY"
+          test -n "$ARCHIVE_SIGNING_PASSPHRASE"
+          test -n "$ARCHIVE_SIGNING_FINGERPRINT"
+
+          install -d -m 700 "$GNUPGHOME"
+          printf '%s' "$ARCHIVE_SIGNING_KEY" | gpg --batch --import
+          actual_fingerprint=${ARCHIVE_SIGNING_FINGERPRINT^^}
+          test "$(printf '%s' "$actual_fingerprint" | wc -c)" -eq 40
+          fingerprints=$(
+            gpg --batch --with-colons --list-secret-keys \
+              "$ARCHIVE_SIGNING_FINGERPRINT" |
+              awk -F: '$1 == "fpr" { print toupper($10) }'
+          )
+          grep -Fxq "$actual_fingerprint" <<< "$fingerprints"
+
+          passphrase_file="$RUNNER_TEMP/rpm-signing-passphrase"
+          public_key="$RUNNER_TEMP/archive-signing-key.asc"
+          umask 077
+          printf '%s' "$ARCHIVE_SIGNING_PASSPHRASE" > "$passphrase_file"
+          gpg --batch --armor --export "$actual_fingerprint" > "$public_key"
+          rpmkeys --import "$public_key"
+
+          mapfile -d '' packages < <(
+            find "$HOME/rpmbuild/RPMS" "$HOME/rpmbuild/SRPMS" \
+              -type f -name '*.rpm' -print0 | sort -z
+          )
+          test "${#packages[@]}" -gt 0
+          for package in "${packages[@]}"; do
+            rpmsign --addsign \
+              --define "_gpg_name $actual_fingerprint" \
+              --define "_gpg_path $GNUPGHOME" \
+              --define "_gpg_digest_algo sha256" \
+              --define "_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback --passphrase-file $passphrase_file" \
+              "$package"
+            rpmkeys --checksig --verbose "$package" | tee /tmp/rpm-checksig
+            grep -Eq 'Signature.*, key ID [[:xdigit:]]+: OK' \
+              /tmp/rpm-checksig
+          done
+
           mkdir dist
-          find "$topdir/RPMS" "$topdir/SRPMS" -type f -name '*.rpm' \
-            -exec cp {} dist/ \;
+          cp "${packages[@]}" dist/
+      - name: Remove signing key material
+        if: ${{ always() }}
+        run: |
+          rm -rf "$GNUPGHOME"
+          rm -f "$RUNNER_TEMP/rpm-signing-passphrase" \
+            "$RUNNER_TEMP/archive-signing-key.asc"
       - uses: actions/upload-artifact@v4
         with:
-          name: rpm-packages
+          name: rpm-x86_64
           path: dist/*.rpm
+          if-no-files-found: error
 
   publish:
     needs: [debian, rpm]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -64,9 +173,17 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Upload packages to release
+      - name: Upload new package revision to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release upload "${{ github.event.release.tag_name }}" dist/*
-          --repo "$GITHUB_REPOSITORY" --clobber
+        run: |
+          gh release upload "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Dispatch package repository publication
+        env:
+          GH_TOKEN: ${{ secrets.PKGS_DISPATCH_TOKEN }}
+        run: |
+          gh api --method POST repos/ChapelTech/pkgs/dispatches \
+            --raw-field event_type=package-release \
+            --field "client_payload[repository]=$GITHUB_REPOSITORY" \
+            --field "client_payload[tag]=$RELEASE_TAG"

@@ -1,3 +1,11 @@
+prefork (0.3-2) unstable; urgency=medium
+
+  * Build Debian 13 packages for amd64 and arm64.
+  * Install the manual page in the standard shared man directory.
+  * Sign EL9 RPM release artifacts and preserve prior package revisions.
+
+ -- ChapelTech <packages@chapel.tech>  Wed, 05 Aug 2026 21:03:31 +0100
+
 prefork (0.3) unstable; urgency=low
 
   * Set umask 022 when creating directories.
