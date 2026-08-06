@@ -1,0 +1,32 @@
+#!/bin/bash
+
+set -euo pipefail
+
+: "${RELEASE_TAG:?}"
+: "${TARGET_ARCHITECTURE:?}"
+: "${SOURCE_DIR:?}"
+: "${PACKAGING_DIR:?}"
+: "${ARTIFACT_DIR:?}"
+
+apt-get update
+apt-get install --no-install-recommends -y \
+  build-essential debhelper fakeroot groff-base
+
+test "$(dpkg --print-architecture)" = "$TARGET_ARCHITECTURE"
+
+rm -rf "$SOURCE_DIR/debian"
+cp -a "$PACKAGING_DIR/debian" "$SOURCE_DIR/debian"
+
+cd "$SOURCE_DIR"
+version=$(dpkg-parsechangelog -SVersion)
+test "${version%%-*}" = "${RELEASE_TAG#v}"
+dpkg-buildpackage --build=binary --no-sign
+
+mapfile -d '' packages < <(
+  find "$SOURCE_DIR/.." -maxdepth 1 -type f \
+    -name "prefork_*_${TARGET_ARCHITECTURE}.deb" -print0 | sort -z
+)
+test "${#packages[@]}" -gt 0
+install -d "$ARTIFACT_DIR"
+cp "${packages[@]}" "$ARTIFACT_DIR/"
+dpkg-deb --info "$ARTIFACT_DIR"/*.deb

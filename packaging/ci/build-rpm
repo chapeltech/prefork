@@ -1,0 +1,45 @@
+#!/bin/bash
+
+set -euo pipefail
+
+: "${RELEASE_TAG:?}"
+: "${TARGET_ARCHITECTURE:?}"
+: "${SOURCE_DIR:?}"
+: "${PACKAGING_DIR:?}"
+: "${ARTIFACT_DIR:?}"
+
+dnf install -y gcc git gzip groff-base make rpm-build
+
+test "$TARGET_ARCHITECTURE" = x86_64
+test "$(uname -m)" = x86_64
+
+version=$(
+  rpm -q --specfile "$PACKAGING_DIR/packaging/rpm/prefork.spec" \
+    --qf '%{VERSION}\n' | head -n 1
+)
+test "$version" = "${RELEASE_TAG#v}"
+
+rm -rf "$SOURCE_DIR/debian" "$SOURCE_DIR/packaging/rpm"
+cp -a "$PACKAGING_DIR/debian" "$SOURCE_DIR/debian"
+mkdir -p "$SOURCE_DIR/packaging"
+cp -a "$PACKAGING_DIR/packaging/rpm" "$SOURCE_DIR/packaging/rpm"
+
+git config --global --add safe.directory "$SOURCE_DIR"
+git -C "$SOURCE_DIR" add --all -- debian packaging/rpm
+source_tree=$(git -C "$SOURCE_DIR" write-tree)
+
+topdir=$HOME/rpmbuild
+mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+git -C "$SOURCE_DIR" archive --format=tar \
+  --prefix="prefork-$version/" "$source_tree" |
+  gzip -n >"$topdir/SOURCES/prefork-$version.tar.gz"
+rpmbuild -ba --define "_topdir $topdir" \
+  "$PACKAGING_DIR/packaging/rpm/prefork.spec"
+
+mapfile -d '' packages < <(
+  find "$topdir/RPMS" "$topdir/SRPMS" -type f -name '*.rpm' \
+    -print0 | sort -z
+)
+test "${#packages[@]}" -gt 0
+install -d "$ARTIFACT_DIR"
+cp "${packages[@]}" "$ARTIFACT_DIR/"
