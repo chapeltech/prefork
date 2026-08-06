@@ -1,0 +1,116 @@
+#!/bin/sh
+
+set -eu
+# shellcheck disable=SC3040 # Alpine /bin/sh is BusyBox ash.
+set -o pipefail
+
+: "${RELEASE_TAG:?}"
+: "${TARGET_ARCHITECTURE:?}"
+: "${SOURCE_DIR:?}"
+: "${PACKAGING_DIR:?}"
+: "${ARTIFACT_DIR:?}"
+
+apk add --no-cache alpine-sdk git groff
+
+case "$TARGET_ARCHITECTURE" in
+	x86_64|aarch64) ;;
+	*)
+		echo "unsupported Alpine architecture: $TARGET_ARCHITECTURE" >&2
+		exit 1
+		;;
+esac
+test "$(apk --print-arch)" = "$TARGET_ARCHITECTURE"
+test "$(uname -m)" = "$TARGET_ARCHITECTURE"
+
+apkbuild=$PACKAGING_DIR/packaging/alpine/APKBUILD
+test -f "$apkbuild"
+test -f "$PACKAGING_DIR/debian/changelog"
+test -f "$PACKAGING_DIR/packaging/rpm/prefork.spec"
+test -d "$SOURCE_DIR/.git"
+
+release_version=${RELEASE_TAG#v}
+package_name=$(sed -n 's/^pkgname=//p' "$apkbuild")
+package_version=$(sed -n 's/^pkgver=//p' "$apkbuild")
+package_revision=$(sed -n 's/^pkgrel=//p' "$apkbuild")
+test "$package_name" = prefork
+test "$package_version" = "$release_version"
+
+debian_version=$(
+	sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' \
+		"$PACKAGING_DIR/debian/changelog"
+)
+test "$debian_version" = "$package_version-$package_revision"
+rpm_version=$(
+	awk '$1 == "Version:" { print $2; exit }' \
+		"$PACKAGING_DIR/packaging/rpm/prefork.spec"
+)
+rpm_revision=$(
+	awk '$1 == "Release:" { sub(/%.*/, "", $2); print $2; exit }' \
+		"$PACKAGING_DIR/packaging/rpm/prefork.spec"
+)
+test "$rpm_version" = "$package_version"
+test "$rpm_revision" = "$package_revision"
+
+git_safe="safe.directory=$SOURCE_DIR"
+source_commit=$(git -c "$git_safe" -C "$SOURCE_DIR" rev-parse HEAD)
+tag_commit=$(
+	git -c "$git_safe" -C "$SOURCE_DIR" \
+		rev-parse "refs/tags/$RELEASE_TAG^{commit}"
+)
+test "$source_commit" = "$tag_commit"
+
+work_dir=$(mktemp -d)
+trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
+package_dir=$work_dir/aports/prefork
+source_parent=$work_dir/source
+staged_source=$source_parent/prefork-$package_version
+repository_dir=$work_dir/packages
+mkdir -p "$package_dir" "$staged_source" "$repository_dir"
+
+git -c "$git_safe" -C "$SOURCE_DIR" archive --format=tar HEAD |
+	tar -xf - -C "$staged_source"
+rm -rf "$staged_source/debian" "$staged_source/packaging/alpine"
+cp -a "$PACKAGING_DIR/debian" "$staged_source/debian"
+mkdir -p "$staged_source/packaging"
+cp -a "$PACKAGING_DIR/packaging/alpine" \
+	"$staged_source/packaging/alpine"
+
+cp "$apkbuild" "$package_dir/APKBUILD"
+tar -C "$source_parent" -czf \
+	"$package_dir/prefork-$package_version.tar.gz" \
+	"prefork-$package_version"
+
+build_user='package-builder'
+adduser -D -h "$work_dir/home" "$build_user"
+addgroup "$build_user" abuild
+chown -R "$build_user:$build_user" "$work_dir"
+
+if test -n "${PACKAGER_PRIVKEY:-}"; then
+	test -f "$PACKAGER_PRIVKEY"
+else
+	su "$build_user" -c "abuild-keygen -a -n"
+	set -- "$work_dir"/home/.abuild/*.rsa.pub
+	test "$#" -eq 1
+	test -f "$1"
+	cp "$1" /etc/apk/keys/
+fi
+su "$build_user" -c "cd '$package_dir' && abuild checksum"
+if test -n "${PACKAGER_PRIVKEY:-}"; then
+	(
+		cd "$package_dir"
+		PACKAGER_PRIVKEY="$PACKAGER_PRIVKEY" \
+			REPODEST="$repository_dir" abuild -F -r
+	)
+else
+	su "$build_user" -c \
+		"cd '$package_dir' && REPODEST='$repository_dir' abuild -r"
+fi
+
+package_list=$work_dir/packages.list
+find "$repository_dir" -type f -name '*.apk' -print | sort >"$package_list"
+test -s "$package_list"
+install -d "$ARTIFACT_DIR"
+while IFS= read -r package; do
+	cp "$package" "$ARTIFACT_DIR/"
+	printf 'Built %s\n' "$ARTIFACT_DIR/${package##*/}"
+done <"$package_list"
