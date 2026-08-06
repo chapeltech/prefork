@@ -1,3 +1,10 @@
+prefork (0.4-1) unstable; urgency=medium
+
+  * Add Alpine package builds.
+  * Use the shared package release workflow.
+
+ -- ChapelTech <packages@chapel.tech>  Thu, 06 Aug 2026 15:29:55 +0100
+
 prefork (0.3-2) unstable; urgency=medium
 
   * Build Debian 13 packages for amd64 and arm64.

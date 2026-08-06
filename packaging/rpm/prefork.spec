@@ -1,6 +1,6 @@
 Name:           prefork
-Version:        0.3
-Release:        2%{?dist}
+Version:        0.4
+Release:        1%{?dist}
 Summary:        Preforking helper for inetd-style services
 License:        MIT
 URL:            https://github.com/ChapelTech/prefork
@@ -30,6 +30,9 @@ install -Dpm0644 prefork.8 %{buildroot}%{_mandir}/man8/prefork.8
 %{_mandir}/man8/prefork.8*
 
 %changelog
+* Thu Aug 06 2026 ChapelTech <packages@chapel.tech> - 0.4-1
+- Add Alpine package builds and use the shared package release workflow.
+
 * Wed Aug 05 2026 ChapelTech <packages@chapel.tech> - 0.3-2
 - Publish signed EL9 RPMs as a new package revision.
 

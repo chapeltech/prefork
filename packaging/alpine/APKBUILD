@@ -1,7 +1,7 @@
 # Maintainer: ChapelTech <packages@chapel.tech>
 pkgname=prefork
-pkgver=0.3
-pkgrel=2
+pkgver=0.4
+pkgrel=1
 pkgdesc="Preforking helper for inetd-style services"
 url="https://github.com/ChapelTech/prefork"
 arch="all"
